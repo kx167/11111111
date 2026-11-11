@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Colours in Bloom</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #071a22; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: manipulation; cursor: pointer; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+/* ==========================================================
+   Colours in Bloom
+   A fast, colourful bouquet: sunflowers, poppies, blossoms,
+   tulips, marigolds and cornflowers, each in its own colours.
+   Tap / click or press R to bloom again.
+   ========================================================== */
+
+const LW = 1280, LH = 860;                       // logical design size
+const GATHER = [LW * 0.5, LH * 0.9];             // where the stems meet
+const FOCAL = [LW * 0.5, LH * 0.42];             // centre of the bouquet
+const RX = 340, RY = 250;                        // bouquet spread
+
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+// ---------- helpers ----------
+const rnd = Math.random;
+const U = (a, b) => a + (b - a) * rnd();
+const pick = a => a[Math.floor(rnd() * a.length)];
+const clamp = (x, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (t, s, d) => clamp((t - s) / d);
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+const smooth = x => x * x * (3 - 2 * x);
+const rgbOf = h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const css = h => `rgb(${rgbOf(h).join(',')})`;
+const quad = (p0, c, p1, t) => {
+  const u = 1 - t;
+  return [u * u * p0[0] + 2 * u * t * c[0] + t * t * p1[0],
+          u * u * p0[1] + 2 * u * t * c[1] + t * t * p1[1]];
+};
+
+// ---------- shapes (drawn along +x from the origin) ----------
+function petal(L, W) {
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo(L * 0.25, -W, L * 0.85, -W * 0.9, L, 0);
+  ctx.bezierCurveTo(L * 0.85, W * 0.9, L * 0.25, W, 0, 0);
+  ctx.closePath();
+}
+
+function notch(L, W) {               // petal with a dip at the tip (blossoms, cornflowers)
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.bezierCurveTo(L * 0.3, -W, L * 1.0, -W * 0.8, L * 0.9, -W * 0.12);
+  ctx.quadraticCurveTo(L * 0.8, 0, L * 0.9, W * 0.12);
+  ctx.bezierCurveTo(L * 1.0, W * 0.8, L * 0.3, W, 0, 0);
+  ctx.closePath();
+}
+
+function fillHex(h) {
+  ctx.fillStyle = css(h);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+// ---------- flower types ----------
+const CFG = {
+  sun:        { s: 58, pal: [['#ffd23f', '#ffb300'], ['#ffe066', '#f9a825'], ['#ffbf00', '#ff8f00']] },
+  poppy:      { s: 52, pal: [['#ff4d3d', '#ff7a45', '#e8323f'], ['#ff6f91', '#ff3d6e', '#ffa3b5']] },
+  blossom:    { s: 40, pal: [['#ffb7d5', '#ff8fb8', '#ffd1e4'], ['#f8c8ff', '#e9a0ff', '#fbe0ff'], ['#ffd1dc', '#ffb3c6', '#ffe5ec']] },
+  tulip:      { s: 44, pal: [['#9b5de5', '#d9b3ff'], ['#ff5c8a', '#ffc2d4'], ['#ff9f1c', '#ffd98a'], ['#00bcd4', '#b2ebf2']] },
+  marigold:   { s: 38, pal: [['#ff9800', '#ffb74d', '#ff7043'], ['#ffc107', '#ffe082', '#ff8f00']] },
+  cornflower: { s: 30, pal: [['#4f8cff', '#7c4dff'], ['#2ec4b6', '#5fe0d6'], ['#3f51b5', '#7986cb']] },
+};
+
+const DRAW = {
+  sun(f, o) {
+    const s = f.s, p = f.pal;
+    for (let i = 0; i < 16; i++) {
+      ctx.save(); ctx.rotate(i * Math.PI * 2 / 16);
+      petal(s * o, s * 0.26 * o); fillHex(p[i % p.length]);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.3 * o, 0, Math.PI * 2); fillHex('#4a2a12');
+    for (let i = 0; i < 40; i++) {                       // seed spiral
+      const a = i * 2.39996, r = s * 0.3 * o * Math.sqrt(i / 40) * 0.95;
+      ctx.beginPath(); ctx.arc(Math.cos(a) * r, Math.sin(a) * r, 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,200,120,0.5)'; ctx.fill();
+    }
+  },
+
+  poppy(f, o) {
+    const s = f.s, p = f.pal;
+    for (let i = 0; i < 4; i++) {
+      ctx.save(); ctx.rotate(i * Math.PI / 2 + 0.3);
+      petal(s * o, s * 0.7 * o); fillHex(p[i % p.length]);
+      ctx.restore();
+    }
+    for (let i = 0; i < 12; i++) {                       // dark stamens
+      const a = i * Math.PI * 2 / 12, L = s * 0.45 * o;
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * L, Math.sin(a) * L);
+      ctx.strokeStyle = '#2b1a1a'; ctx.lineWidth = 1.2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(Math.cos(a) * L, Math.sin(a) * L, 2.2, 0, Math.PI * 2);
+      fillHex('#2b1a1a');
+    }
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.2 * o, 0, Math.PI * 2); fillHex('#1e0a10');
+  },
+
+  blossom(f, o) {
+    const s = f.s, p = f.pal;
+    for (let i = 0; i < 5; i++) {
+      ctx.save(); ctx.rotate(i * Math.PI * 2 / 5 - Math.PI / 2);
+      notch(s * o, s * 0.5 * o); fillHex(p[i % p.length]);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.12 * o, 0, Math.PI * 2); fillHex('#ffe066');
+    for (let i = 0; i < 10; i++) {
+      const a = i * 0.63;
+      ctx.beginPath(); ctx.arc(Math.cos(a) * s * 0.12 * o, Math.sin(a) * s * 0.12 * o, 1.4, 0, Math.PI * 2);
+      fillHex('#ffb300');
+    }
+  },
+
+  tulip(f, o) {                                          // upright cup (no rotation applied)
+    const s = f.s, p = f.pal;
+    const spread = lerp(0.25, 0.6, o), L = s * lerp(0.7, 1.05, o), W = s * 0.32 * lerp(0.7, 1, o);
+    const up = -Math.PI / 2;
+    for (const [th, col] of [[up - spread, p[0]], [up + spread, p[0]], [up, p[1]]]) {
+      ctx.save(); ctx.translate(0, s * 0.22); ctx.rotate(th);
+      petal(L, W); fillHex(col);
+      ctx.restore();
+    }
+  },
+
+  marigold(f, o) {
+    const s = f.s, p = f.pal;
+    for (let i = 0; i < 18; i++) {
+      ctx.save(); ctx.rotate(i * Math.PI * 2 / 18);
+      petal(s * o, s * 0.34 * o); fillHex(p[i % p.length]);
+      ctx.restore();
+    }
+    for (let i = 0; i < 12; i++) {
+      ctx.save(); ctx.rotate(i * Math.PI * 2 / 12 + 0.13);
+      petal(s * 0.66 * o, s * 0.26 * o); fillHex(p[(i + 1) % p.length]);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.16 * o, 0, Math.PI * 2); fillHex('#ffd54a');
+  },
+
+  cornflower(f, o) {
+    const s = f.s, p = f.pal;
+    for (let i = 0; i < 6; i++) {
+      ctx.save(); ctx.rotate(i * Math.PI / 3);
+      notch(s * o, s * 0.42 * o); fillHex(p[i % p.length]);
+      ctx.restore();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, s * 0.17 * o, 0, Math.PI * 2); fillHex('#fff7d6');
+  },
+};
+
+// ---------- bouquet ----------
+function makeFlower(type, i, n) {
+  const c = CFG[type];
+  const r = Math.sqrt((i + 0.5) / n), a = i * 2.39996 + U(-0.2, 0.2);
+  const final = [FOCAL[0] + Math.cos(a) * r * RX, FOCAL[1] + Math.sin(a) * r * RY];
+  const scatter = [U(LW * 0.3, LW * 0.7), U(LH * 0.6, LH * 0.72)];
+  const isTulip = type === 'tulip';
+  return {
+    type,
+    s: c.s * U(0.9, 1.15),
+    pal: pick(c.pal),
+    rot: isTulip ? 0 : U(0, Math.PI * 2),
+    tilt: isTulip ? 1 : U(0.8, 0.95),
+    final, scatter, head: scatter.slice(), sway: 0,
+    ph: U(0, Math.PI * 2), bend: U(-70, 70),
+    growStart: U(0.1, 0.5), growDur: U(0.6, 0.8),
+    bloomStart: 0, bloomDur: U(0.9, 1.2), sparked: false,
+    leaves: [
+      { u: U(0.35, 0.6), side: -1, len: U(18, 26) },
+      { u: U(0.45, 0.75), side: 1, len: U(18, 26) },
+    ],
+  };
+}
+
+function build() {
+  const kinds = [
+    ...Array(3).fill('sun'), ...Array(2).fill('poppy'), ...Array(3).fill('blossom'),
+    ...Array(2).fill('tulip'), ...Array(2).fill('marigold'), ...Array(2).fill('cornflower'),
+  ];
+  const n = kinds.length;
+  const list = kinds.map((type, i) => makeFlower(type, i, n));
+  const order = list.slice().sort(() => rnd() - 0.5);     // shuffled bloom order
+  order.forEach((f, k) => { f.bloomStart = 0.6 + k * 0.2 + U(0, 0.12); });
+  return list;
+}
+
+// ---------- ambient ----------
+const stars = [];
+for (let i = 0; i < 160; i++) stars.push([U(0, LW), U(0, LH), U(0.7, 1.9), U(0, 6.28), U(0.6, 2)]);
+const MOTE_COLS = ['#ffd6e8', '#ffe9a8', '#c9f2ff', '#f9c6ff'];
+const motes = [];
+for (let i = 0; i < 70; i++) motes.push({ x: U(0, LW), y: U(0, LH), r: U(1, 2.6), vy: U(8, 22), col: pick(MOTE_COLS) });
+
+let t = 0, last = performance.now(), bouquet = [], sparkles = [];
+
+// ---------- update ----------
+function update(dt) {
+  for (const f of bouquet) {
+    const m = smooth(prog(t, f.bloomStart - 0.6, 1.3));    // flight from scatter to place
+    const sx = Math.sin(t * 0.9 + f.ph) * 4;
+    const sy = Math.sin(t * 0.6 + f.ph * 1.3) * 2;
+    f.head = [lerp(f.scatter[0], f.final[0], m) + sx, lerp(f.scatter[1], f.final[1], m) + sy];
+    f.sway = Math.sin(t * 0.9 + f.ph) * 0.05;
+    if (!f.sparked && t >= f.bloomStart) {
+      f.sparked = true;
+      for (let i = 0; i < 8; i++) {
+        const life = U(1.5, 2.8);
+        sparkles.push({
+          x: f.head[0] + U(-30, 30), y: f.head[1] + U(-30, 10),
+          vx: U(-8, 8), vy: -U(10, 40), life, max: life, col: pick(f.pal),
+        });
+      }
+    }
+  }
+  sparkles = sparkles.filter(sp => {
+    sp.x += sp.vx * dt; sp.y += sp.vy * dt; sp.life -= dt;
+    return sp.life > 0;
+  });
+  for (const m of motes) {
+    m.y -= m.vy * dt;
+    if (m.y < -10) m.y = LH + 10;
+  }
+}
+
+// ---------- drawing ----------
+function drawStem(f) {
+  const g = easeOut(prog(t, f.growStart, f.growDur));
+  if (g <= 0) return;
+  const P0 = GATHER, H = f.head;
+  const C = [(P0[0] + H[0]) / 2 + f.bend, (P0[1] + H[1]) / 2];
+  const N = 24;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = '#5b9a64';
+  let prev = P0;
+  for (let i = 1; i <= N; i++) {
+    const p = quad(P0, C, H, g * i / N);
+    ctx.lineWidth = Math.max(1, 3.4 * (1 - 0.5 * i / N));
+    ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
+    prev = p;
+  }
+  for (const lf of f.leaves) {
+    const e = smooth(prog(t, f.growStart + f.growDur * lf.u, 0.9));
+    if (e <= 0) continue;
+    const base = quad(P0, C, H, lf.u);
+    const d = quad(P0, C, H, Math.min(1, lf.u + 0.02));
+    const ang = Math.atan2(d[1] - base[1], d[0] - base[0]) + lf.side * 0.9;
+    ctx.save();
+    ctx.translate(base[0], base[1]); ctx.rotate(ang);
+    petal(lf.len * easeOut(e), lf.len * 0.28 * easeOut(e));
+    fillHex('#4f9a5c');
+    ctx.restore();
+  }
+}
+
+function drawBud(f, x, y) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.beginPath(); ctx.ellipse(0, 0, 7, 10, 0, 0, Math.PI * 2);
+  fillHex(f.pal[0]);
+  ctx.restore();
+}
+
+function draw() {
+  // clear the whole canvas, then draw the letterboxed scene
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#071a22';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.setTransform(DPR * S, 0, 0, DPR * S, DPR * OX, DPR * OY);
+
+  // background
+  const bg = ctx.createLinearGradient(0, 0, 0, LH);
+  bg.addColorStop(0, '#0a2430');
+  bg.addColorStop(1, '#1f1a33');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, LW, LH);
+
+  // warm glow behind the bouquet
+  const glow = ctx.createRadialGradient(FOCAL[0], FOCAL[1], 0, FOCAL[0], FOCAL[1], 560);
+  glow.addColorStop(0, 'rgba(255,200,170,0.16)');
+  glow.addColorStop(1, 'rgba(255,200,170,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, LW, LH);
+
+  // stars
+  for (const [x, y, r, ph, sp] of stars) {
+    ctx.globalAlpha = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * sp + ph));
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff6ff'; ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // floating motes
+  for (const m of motes) {
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+    ctx.fillStyle = css(m.col); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // stems and leaves first
+  for (const f of bouquet) drawStem(f);
+
+  // flowers, back to front
+  const order = bouquet.slice().sort((a, b) => a.final[1] - b.final[1]);
+  for (const f of order) {
+    if (t < f.bloomStart) {
+      if (t >= f.growStart + f.growDur) drawBud(f, f.head[0], f.head[1]);
+      continue;
+    }
+    const o = easeOut(prog(t, f.bloomStart, f.bloomDur));
+    ctx.save();
+    ctx.translate(f.head[0], f.head[1]);
+    ctx.scale(1, f.tilt);
+    ctx.rotate(f.rot + f.sway);
+    DRAW[f.type](f, o);
+    ctx.restore();
+  }
+
+  // sparkles
+  for (const sp of sparkles) {
+    ctx.globalAlpha = clamp(sp.life / sp.max);
+    ctx.beginPath(); ctx.arc(sp.x, sp.y, 2.2, 0, Math.PI * 2);
+    ctx.fillStyle = css(sp.col); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // closing line once everything has bloomed
+  const lastEnd = Math.max(...bouquet.map(f => f.bloomStart + f.bloomDur));
+  const ma = smooth(prog(t, lastEnd + 0.6, 1.2));
+  if (ma > 0) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.globalAlpha = ma;
+    ctx.fillStyle = '#ffe6f2';
+    ctx.font = "italic 30px Georgia, 'Times New Roman', serif";
+    ctx.fillText('You are so special Amu.....', LW / 2, LH - 80);
+    ctx.globalAlpha = ma * 0.6;
+    ctx.font = '16px Georgia, serif';
+    ctx.fillText('You deserve real flower..& i will bring you soon', LW / 2, LH - 44);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------- canvas scaling and loop ----------
+let S = 1, OX = 0, OY = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const w = window.innerWidth, h = window.innerHeight;
+  cv.width = Math.round(w * DPR);
+  cv.height = Math.round(h * DPR);
+  S = Math.min(w / LW, h / LH);                    // keep the design's aspect ratio, centred
+  OX = (w - LW * S) / 2;
+  OY = (h - LH * S) / 2;
+}
+
+function restart() {
+  bouquet = build();
+  sparkles = [];
+  t = 0;
+}
+
+function frame(now) {
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  t += dt;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+window.addEventListener('resize', resize);
+window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') restart(); });
+cv.addEventListener('pointerdown', restart);
+
+resize();
+restart();
+requestAnimationFrame(now => { last = now; frame(now); });
+</script>
+</body>
+</html>
